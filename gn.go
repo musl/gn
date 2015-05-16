@@ -3,6 +3,7 @@ package main
 
 import (
 "code.google.com/p/portaudio-go/portaudio"
+"fmt"
 "flag"
 "math/rand"
 "os"
@@ -25,6 +26,8 @@ func main() {
 	//flag.Float64Var(&config.Freq, "rate", 0.1, "rate of variance")
 	flag.Int64Var(&config.Time, "time", 3600, "length of play")
 	flag.Parse();
+
+	fmt.Println("gn v0.0.0")
 
 	// Shut. Up.
 	dev_null, _ := os.Open("/dev/null")
