@@ -1,0 +1,8 @@
+language: go
+go:
+- 1.4
+- tip
+install:
+- go get -v code.google.com/p/portaudio-go/portaudio
+- go get -v github.com/musl/gn
+script: "gn -time=0"
