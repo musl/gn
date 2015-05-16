@@ -11,4 +11,8 @@ This assumes you have a `$GOPATH` setup correctly and that `$GOPATH/bin` is in y
   
 Description
 -----------
-Beats the heck out of `dd if=/dev/urandom of=/dev/dsp`. Soon, this code will support modulating the overall volume, a configurable modulating FFT filter, and more.
+Beats the heck out of `dd if=/dev/urandom of=/dev/dsp`. Soon, this code will support:
+	- modulating the overall volume
+	- a configurable modulating FFT filte
+	- different noise models, envelopes, etc.
+
