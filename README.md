@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/musl/gn.svg?branch=master)](https://travis-ci.org/musl/gn)
+
 # gn
 A simple **N**oise **G**enerator for use when music would be too distracting written in go.  Yeah, the letters are in an order different to the initialism.  It's meant to sound like the noise polite people make when they're realizing that their coworkers are loud and don't want to tell them to pipe down.
 
