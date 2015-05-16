@@ -1,8 +1,18 @@
 language: go
+
 go:
-- 1.4
-- tip
+    - 1.4
+    - tip
+
+sudo: false
+
+addons:
+    apt:
+        packages:
+            - portaudio19-dev
 install:
 - go get code.google.com/p/portaudio-go/portaudio
 - go get github.com/musl/gn
+
 script: "gn -time=0"
+
