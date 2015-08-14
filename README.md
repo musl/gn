@@ -6,6 +6,7 @@ A simple **N**oise **G**enerator for use when music would be too distracting wri
 Summary
 -------
     go get code.google.com/p/portaudio-go/portaudio
+    go get github.com/mjibson/go-dsp/fft
     go get github.com/musl/gn
     gn <options>
 
