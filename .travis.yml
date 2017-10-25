@@ -1,7 +1,9 @@
 language: go
 
 go:
-    - 1.4
+    - 1.7
+    - 1.8
+    - 1.9
     - tip
 
 sudo: false
@@ -11,10 +13,6 @@ addons:
         packages:
             - portaudio19-dev
 install:
-    - go get code.google.com/p/portaudio-go/portaudio
-    - go get github.com/mjibson/go-dsp/fft
-    - go get github.com/musl/gn
-
 script: 
-    - make
+    - make clean vendor commands
 
