@@ -1,18 +1,15 @@
-
 package main
 
 import (
-"code.google.com/p/portaudio-go/portaudio"
-"github.com/mjibson/go-dsp/fft"
-//"github.com/mjibson/go-dsp/window"
-"flag"
-"fmt"
-"math"
-//"math/cmplx"
-"math/rand"
-"os"
-"syscall"
-"time"
+	"flag"
+	"fmt"
+	"github.com/gordonklaus/portaudio"
+	"github.com/mjibson/go-dsp/fft"
+	"math"
+	"math/rand"
+	"os"
+	"syscall"
+	"time"
 )
 
 type Config struct {
@@ -30,63 +27,51 @@ type Frame struct {
 
 func (self *Frame) Fill() {
 	for i := range self.Left {
-		self.Left[i] = rand.Float64();
-		self.Right[i] = rand.Float64();
+		self.Left[i] = rand.Float64()
+		self.Right[i] = rand.Float64()
 	}
 }
 
-func (self *Frame) Filter(config *Config) {
-	i := 0
-	//p := math.Pi * 0.0625
-	p := 0.0
-	t := 0.0
-	s := 0.1 / config.SampleRate
-	m := 0.0
-	n := 0.0001
-	v := 0.0
-	x := 0.0
+func (self *Frame) ApplyFilter(config *Config) {
+	a := 1.0
+	max_freq := 20000.0
+	cutoff := 20.0
+	volume_factor := 1000.0
 
-	l := fft.FFTReal(self.Left)
-	r := fft.FFTReal(self.Right)
+	lc := fft.FFTReal(self.Left)
+	rc := fft.FFTReal(self.Right)
 
-	m = float64(len(l))
-	for i = range l {
-		p = 0.5 * math.Sin(2.0 * math.Pi * t)
-		_, t = math.Modf(t + s)
-		x = float64(i)
-		v = 0.5 + 0.5 * math.Cos(p + ((1.0 + n) / ((n * m / x) * m + x)) * math.Pi * x)
-		self.Left[i] = real(l[i]) * v
-		self.Right[i] = real(r[i]) * v
+	for i := range lc {
+		f := (float64(i) / float64(len(lc))) * max_freq
+		if f <= cutoff {
+			lc[i] = complex(0, 0)
+			rc[i] = complex(0, 0)
+			continue
+		}
+		lc[i] *= complex(a*(1.0/math.Pow(f, a)), 0)
+		rc[i] *= complex(a*(1.0/math.Pow(f, a)), 0)
 	}
 
-	l = fft.IFFTReal(self.Left)
-	r = fft.IFFTReal(self.Right)
+	lc = fft.IFFT(lc)
+	rc = fft.IFFT(rc)
 
 	for i := range self.Left {
-		self.Left[i] = real(l[i]) * config.Vol
-		self.Right[i] = real(r[i]) * config.Vol
+		if real(lc[i]) > 1.0 || real(lc[i]) < -1.0 {
+			lc[i] = complex(0, 0)
+		}
+		self.Left[i] = real(lc[i]) * volume_factor * config.Vol
+		if real(rc[i]) > 1.0 || real(rc[i]) < -1.0 {
+			rc[i] = complex(0, 0)
+		}
+		self.Right[i] = real(rc[i]) * volume_factor * config.Vol
 	}
-}
 
-func (self *Frame) DePop(last *Frame) {
-	n := 8
-	l := last.Left[n - 1]
-	r := last.Right[n - 1]
-	a := 0.0
-	b := 0.0
-
-	for i := 0; i < n; i ++ {
-		a = float64(i) / float64(n)
-		b = 1.0 - a
-		self.Left[i] = self.Left[i] * a + l * b
-		self.Right[i] = self.Right[i] * a + r * b
-	}
 }
 
 func (self *Frame) Copy(out []float32) {
 	for i := range self.Left {
-		out[i * 2] = float32(self.Left[i])
-		out[i * 2 + 1] = float32(self.Right[i])
+		out[i*2] = float32(self.Left[i])
+		out[i*2+1] = float32(self.Right[i])
 	}
 }
 
@@ -94,20 +79,17 @@ func play(config *Config) {
 	portaudio.Initialize()
 	defer portaudio.Terminate()
 
-	frames := make(chan Frame, 4)
-	last := make_frame(config)
+	frames := make(chan Frame, 16)
 
 	produce := func() {
 		for {
-			frames<- make_frame(config)
+			frames <- make_frame(config)
 		}
 	}
 
 	consume := func(out []float32) {
 		frame := <-frames
-		frame.DePop(&last)
 		frame.Copy(out)
-		last = frame
 	}
 
 	stream, err := portaudio.OpenDefaultStream(0, 2, config.SampleRate, config.FrameSize, consume)
@@ -118,7 +100,7 @@ func play(config *Config) {
 
 	// pre-fill the buffer
 	for i := 0; i < len(frames); i++ {
-		frames<- make_frame(config)
+		frames <- make_frame(config)
 	}
 
 	go produce()
@@ -132,7 +114,7 @@ func make_frame(config *Config) Frame {
 	f.Left = make([]float64, config.FrameSize)
 	f.Right = make([]float64, config.FrameSize)
 	f.Fill()
-	f.Filter(config)
+	f.ApplyFilter(config)
 	return f
 }
 
@@ -160,6 +142,5 @@ func main() {
 	}
 
 	fmt.Println("gn v0.0.0")
-	play(&config);
+	play(&config)
 }
-

@@ -5,10 +5,14 @@ A simple **N**oise **G**enerator for use when music would be too distracting wri
 
 Summary
 -------
-    go get code.google.com/p/portaudio-go/portaudio
-    go get github.com/mjibson/go-dsp/fft
-    go get github.com/musl/gn
-    gn <options>
+```
+brew install portaudio
+make
+go get github.com/musl/gn
+cd $GOROOT/src/github.com/musl/gn
+make
+./gn <options>
+```
 
 This assumes you have a `$GOPATH` setup correctly and that `$GOPATH/bin` is in your path.  Refer to `go help gopath` for more information.  I assume you know how to build go apps.  I don't yet care if this app doesn't build on platform *x*, architecture *y*, or planet *z*.  You'll have to give me a reason.
   

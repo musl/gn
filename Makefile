@@ -1,0 +1,22 @@
+DEPS := github.com/gordonklaus/portaudio
+DEPS += github.com/mjibson/go-dsp
+
+.PHONY: all clean commands test
+
+all: commands test
+
+clean:
+	rm -fr vendor
+	make -C cmd/gn clean
+	
+vendor:
+	mkdir -p vendor
+	for repo in $(DEPS); do git clone https://$$repo vendor/$$repo; done
+	rm -fr vendor/*/*/*/.git
+	
+commands:
+	make -C cmd/gn
+
+test: 
+	make -C cmd/gn test
+
