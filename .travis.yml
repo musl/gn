@@ -15,8 +15,6 @@ install:
     - go get github.com/mjibson/go-dsp/fft
     - go get github.com/musl/gn
 
-# For now, as long as it builds, I'm happy. I'll get around to
-# tests, I swear.
 script: 
-    - yes
+    - make
 
