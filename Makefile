@@ -1,9 +1,10 @@
 DEPS := github.com/gordonklaus/portaudio
 DEPS += github.com/mjibson/go-dsp
+DEPS += github.com/Arafatk/glot
 
 .PHONY: all clean commands test
 
-all: commands test
+all: commands test run
 
 clean:
 	rm -fr vendor
@@ -20,3 +21,5 @@ commands:
 test: 
 	make -C cmd/gn test
 
+run: 
+	./cmd/gn/gn --quiet=false

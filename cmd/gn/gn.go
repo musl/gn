@@ -3,120 +3,17 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/Arafatk/glot"
 	"github.com/gordonklaus/portaudio"
+	"github.com/mjibson/go-dsp/dsputils"
 	"github.com/mjibson/go-dsp/fft"
-	"math"
+	//"math"
 	"math/rand"
 	"os"
+	"runtime"
 	"syscall"
 	"time"
 )
-
-type Config struct {
-	Vol        float64
-	Time       int64
-	SampleRate float64
-	Quiet      bool
-	FrameSize  int
-}
-
-type Frame struct {
-	Left  []float64
-	Right []float64
-}
-
-func (self *Frame) Fill() {
-	for i := range self.Left {
-		self.Left[i] = rand.Float64()
-		self.Right[i] = rand.Float64()
-	}
-}
-
-func (self *Frame) ApplyFilter(config *Config) {
-	a := 1.0
-	max_freq := 20000.0
-	cutoff := 20.0
-	volume_factor := 1000.0
-
-	lc := fft.FFTReal(self.Left)
-	rc := fft.FFTReal(self.Right)
-
-	for i := range lc {
-		f := (float64(i) / float64(len(lc))) * max_freq
-		if f <= cutoff {
-			lc[i] = complex(0, 0)
-			rc[i] = complex(0, 0)
-			continue
-		}
-		lc[i] *= complex(a*(1.0/math.Pow(f, a)), 0)
-		rc[i] *= complex(a*(1.0/math.Pow(f, a)), 0)
-	}
-
-	lc = fft.IFFT(lc)
-	rc = fft.IFFT(rc)
-
-	for i := range self.Left {
-		if real(lc[i]) > 1.0 || real(lc[i]) < -1.0 {
-			lc[i] = complex(0, 0)
-		}
-		self.Left[i] = real(lc[i]) * volume_factor * config.Vol
-		if real(rc[i]) > 1.0 || real(rc[i]) < -1.0 {
-			rc[i] = complex(0, 0)
-		}
-		self.Right[i] = real(rc[i]) * volume_factor * config.Vol
-	}
-
-}
-
-func (self *Frame) Copy(out []float32) {
-	for i := range self.Left {
-		out[i*2] = float32(self.Left[i])
-		out[i*2+1] = float32(self.Right[i])
-	}
-}
-
-func play(config *Config) {
-	portaudio.Initialize()
-	defer portaudio.Terminate()
-
-	frames := make(chan Frame, 16)
-
-	produce := func() {
-		for {
-			frames <- make_frame(config)
-		}
-	}
-
-	consume := func(out []float32) {
-		frame := <-frames
-		frame.Copy(out)
-	}
-
-	stream, err := portaudio.OpenDefaultStream(0, 2, config.SampleRate, config.FrameSize, consume)
-	check_error(err)
-
-	check_error(stream.Start())
-	defer stream.Close()
-
-	// pre-fill the buffer
-	for i := 0; i < len(frames); i++ {
-		frames <- make_frame(config)
-	}
-
-	go produce()
-
-	time.Sleep(time.Duration(config.Time) * time.Second)
-	check_error(stream.Stop())
-}
-
-func make_frame(config *Config) Frame {
-	f := Frame{}
-	f.Left = make([]float64, config.FrameSize)
-	f.Right = make([]float64, config.FrameSize)
-	f.Fill()
-	f.ApplyFilter(config)
-	return f
-}
 
 func check_error(err error) {
 	if err != nil {
@@ -124,22 +21,183 @@ func check_error(err error) {
 	}
 }
 
+type Config struct {
+	Quiet      bool
+	SampleRate int
+	Time       int
+	Vol        float64
+}
+
+type Buffer struct {
+	Left         []float64
+	Right        []float64
+	SegmentCount int
+	SegmentSize  int
+}
+
+type Filter struct {
+	Overlap int
+}
+
+func (self *Buffer) Dump(path string) {
+	f, err := os.Create(path)
+	defer f.Close()
+	check_error(err)
+
+	for i := range self.Left {
+		fmt.Fprintf(f, "%d\t%f\n", i, self.Left[i])
+	}
+
+	fmt.Fprintf(f, "\n\n")
+
+	for i := range self.Right {
+		fmt.Fprintf(f, "%d\t%f\n", i, self.Right[i])
+	}
+
+	f.Sync()
+}
+
+func (self *Buffer) Plot() {
+	left, _ := glot.NewPlot(2, true, false)
+	left.AddPointGroup("Left", "points", self.Left)
+	left.SetTitle("Left")
+
+	right, _ := glot.NewPlot(2, true, false)
+	right.AddPointGroup("Right", "points", self.Right)
+	right.SetTitle("Right")
+}
+
+func NewBuffer(segment_count, segment_size int) Buffer {
+	buffer := Buffer{
+		Left:         make([]float64, segment_count*segment_size),
+		Right:        make([]float64, segment_count*segment_size),
+		SegmentCount: segment_count,
+		SegmentSize:  segment_size,
+	}
+
+	return buffer
+}
+
+func (self *Buffer) Fill() {
+	for i := range self.Left {
+		self.Left[i] = rand.Float64()
+		self.Right[i] = rand.Float64()
+	}
+}
+
+func (self *Buffer) ShiftAndFill() {
+	last_segment := len(self.Left) - self.SegmentSize
+
+	for i := range self.Left {
+		if i < self.SegmentSize {
+			self.Left[i] = self.Left[last_segment+i]
+			self.Right[i] = self.Right[last_segment+i]
+		} else {
+			self.Left[i] = rand.Float64()
+			self.Right[i] = rand.Float64()
+		}
+	}
+}
+
+func (self *Buffer) Mul(factor float64) {
+	for i := range self.Left {
+		self.Left[i] *= factor
+		self.Right[i] *= factor
+	}
+}
+
+func (self *Buffer) Copy(out []float32) {
+	for i := range self.Left {
+		out[i*2] = float32(self.Left[i])
+		out[i*2+1] = float32(self.Right[i])
+	}
+}
+
+func (self Filter) Apply(in, out *Buffer) {
+	for i := 1; i < in.SegmentCount-1; i++ {
+		a := i*in.SegmentSize - self.Overlap
+		b := (i+1)*in.SegmentSize + self.Overlap
+
+		l := dsputils.ToComplex(in.Left[a:b])
+		r := dsputils.ToComplex(in.Right[a:b])
+
+		l = fft.FFT(l)
+		r = fft.FFT(r)
+
+		/*
+			for j := range l {
+				l[j] *= self.Factors[j]
+				r[j] *= self.Factors[j]
+			}
+		*/
+
+		l = fft.IFFT(l)
+		r = fft.IFFT(r)
+
+		for j := 0; j < in.SegmentSize; j++ {
+			n := (i-1)*in.SegmentSize + j
+			out.Left[n] = real(l[self.Overlap+j])
+			out.Right[n] = real(r[self.Overlap+j])
+		}
+	}
+}
+
+func play(config *Config) {
+	portaudio.Initialize()
+	defer portaudio.Terminate()
+
+	buffers := make(chan Buffer, 4)
+
+	go func() {
+		noise := NewBuffer(12, 4410)
+		filtered := NewBuffer(10, 4410)
+		filter := Filter{
+			Overlap: 441,
+		}
+
+		noise.Fill()
+
+		for {
+			noise.ShiftAndFill()
+			filter.Apply(&noise, &filtered)
+			filtered.Mul(config.Vol)
+			buffers <- filtered
+		}
+	}()
+
+	consume := func(out []float32) {
+		buf := <-buffers
+		buf.Copy(out)
+	}
+
+	stream, err := portaudio.OpenDefaultStream(
+		0, 2, float64(config.SampleRate), 44100, consume)
+	check_error(err)
+
+	check_error(stream.Start())
+	defer stream.Close()
+
+	fmt.Println("waiting")
+	time.Sleep(time.Duration(config.Time) * time.Second)
+	check_error(stream.Stop())
+}
+
 func main() {
 	config := Config{}
 
-	flag.Float64Var(&config.Vol, "volume", 0.5, "output volume as a float")
-	flag.Int64Var(&config.Time, "time", 3600, "length of play in seconds")
-	flag.IntVar(&config.FrameSize, "frame-size", 131072, "frame size")
-	flag.Float64Var(&config.SampleRate, "sample-rate", 44100, "samples per second")
 	flag.BoolVar(&config.Quiet, "quiet", true, "Don't print messages.")
+	flag.IntVar(&config.SampleRate, "sample-rate", 44100, "samples per second")
+	flag.IntVar(&config.Time, "time", 3600, "length of play in seconds")
+	flag.Float64Var(&config.Vol, "volume", 0.5, "output volume as a float")
 	flag.Parse()
 
 	if config.Quiet {
-		// Shut. Up.
 		dev_null, _ := os.Open("/dev/null")
 		syscall.Dup2(int(dev_null.Fd()), 1)
 		syscall.Dup2(int(dev_null.Fd()), 2)
 	}
+
+	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	fmt.Println("gn v0.0.0")
 	play(&config)
