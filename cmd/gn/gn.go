@@ -205,6 +205,8 @@ func play(config *Config) {
 	go func() {
 		noise := NewBuffer(11, 16384)
 		filtered := NewBuffer(10, 16384)
+
+		// TODO: modulate C, Gain
 		filter := Filter{
 			C:      0.1,
 			Gain:   10.0,
