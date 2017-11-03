@@ -7,7 +7,7 @@ import (
 	"github.com/gordonklaus/portaudio"
 	"github.com/mjibson/go-dsp/dsputils"
 	"github.com/mjibson/go-dsp/fft"
-	//"github.com/mjibson/go-dsp/window"
+	"github.com/mjibson/go-dsp/window"
 	//"math"
 	"math/rand"
 	"os"
@@ -37,9 +37,9 @@ type Buffer struct {
 }
 
 type Filter struct {
-	Overlap int
-	C       float64
-	Gain    float64
+	Gain   float64
+	Cutoff int
+	C      float64
 }
 
 func (self *Buffer) Dump(path string) {
@@ -83,8 +83,8 @@ func NewBuffer(segment_count, segment_size int) Buffer {
 
 func (self *Buffer) Fill() {
 	for i := range self.Left {
-		self.Left[i] = rand.Float64()
-		self.Right[i] = rand.Float64()
+		self.Left[i] = -1.0 + 2.0*rand.Float64()
+		self.Right[i] = -1.0 + 2.0*rand.Float64()
 	}
 }
 
@@ -96,8 +96,8 @@ func (self *Buffer) ShiftAndFill() {
 			self.Left[i] = self.Left[last_segment+i]
 			self.Right[i] = self.Right[last_segment+i]
 		} else {
-			self.Left[i] = rand.Float64()
-			self.Right[i] = rand.Float64()
+			self.Left[i] = -1.0 + 2.0*rand.Float64()
+			self.Right[i] = -1.0 + 2.0*rand.Float64()
 		}
 	}
 }
@@ -117,34 +117,77 @@ func (self *Buffer) Copy(out []float32) {
 }
 
 func (self Filter) Apply(in, out *Buffer) {
-	for i := 1; i < in.SegmentCount-1; i++ {
-		a := i*in.SegmentSize - self.Overlap
-		b := (i+1)*in.SegmentSize + self.Overlap
+	win := window.Hann
+	size := in.SegmentSize
+	half := size / 2
 
-		l := dsputils.ToComplex(in.Left[a:b])
-		r := dsputils.ToComplex(in.Right[a:b])
+	la := make([]float64, len(in.Left))
+	ra := make([]float64, len(in.Left))
+	copy(la, in.Left)
+	copy(ra, in.Right)
+	lc := dsputils.ToComplex(la)
+	rc := dsputils.ToComplex(ra)
 
-		l = fft.FFT(l)
-		r = fft.FFT(r)
+	lb := make([]float64, len(la)-size)
+	rb := make([]float64, len(ra)-size)
+	copy(lb, la[half:len(la)-half])
+	copy(rb, ra[half:len(ra)-half])
+	ld := dsputils.ToComplex(lb)
+	rd := dsputils.ToComplex(rb)
 
-		for j := range l {
+	for i := 0; i < len(la); i += size {
+		window.Apply(la[i:i+size], win)
+		window.Apply(ra[i:i+size], win)
+		ls := lc[i : i+size]
+		rs := rc[i : i+size]
+		ls = fft.FFT(ls)
+		rs = fft.FFT(rs)
+
+		for j := range ls {
 			f := 0.0
-			if j > 0 {
+			if j > self.Cutoff {
 				f = 1.0 / (self.C*float64(j) + 1.0)
 			}
-			l[j] *= complex(f, 0.0)
-			r[j] *= complex(f, 0.0)
+			ls[j] *= complex(f, 0.0)
+			rs[j] *= complex(f, 0.0)
 		}
 
-		l = fft.IFFT(l)
-		r = fft.IFFT(r)
-
-		for j := 0; j < in.SegmentSize; j++ {
-			n := (i-1)*in.SegmentSize + j
-			out.Left[n] = self.Gain * real(l[self.Overlap+j])
-			out.Right[n] = self.Gain * real(r[self.Overlap+j])
-		}
+		ls = fft.IFFT(ls)
+		rs = fft.IFFT(rs)
+		copy(lc[i:i+size], ls)
+		copy(rc[i:i+size], rs)
 	}
+
+	for i := 0; i < len(lb); i += size {
+		window.Apply(lb[i:i+size], win)
+		window.Apply(rb[i:i+size], win)
+		ls := ld[i : i+size]
+		rs := rd[i : i+size]
+		ls = fft.FFT(ls)
+		rs = fft.FFT(rs)
+
+		for j := range ls {
+			f := 0.0
+			if j > self.Cutoff {
+				f = 1.0 / (self.C*float64(j) + 1.0)
+			}
+			ls[j] *= complex(f, 0.0)
+			rs[j] *= complex(f, 0.0)
+		}
+
+		ls = fft.IFFT(ls)
+		rs = fft.IFFT(rs)
+		copy(ld[i:i+size], ls)
+		copy(rd[i:i+size], rs)
+	}
+
+	for i := range lb {
+		ls := (real(lc[i+half]) + real(ld[i])) / 2.0
+		rs := (real(rc[i+half]) + real(rd[i])) / 2.0
+		out.Left[i] = self.Gain * ls
+		out.Right[i] = self.Gain * rs
+	}
+
 	/*
 		out.Plot()
 		os.Exit(-1)
@@ -152,21 +195,24 @@ func (self Filter) Apply(in, out *Buffer) {
 }
 
 func play(config *Config) {
+	rand.Seed(time.Now().UTC().UnixNano())
+
 	portaudio.Initialize()
 	defer portaudio.Terminate()
 
-	buffers := make(chan Buffer, 32)
+	buffers := make(chan Buffer, 4)
 
 	go func() {
-		noise := NewBuffer(12, 16384)
+		noise := NewBuffer(11, 16384)
 		filtered := NewBuffer(10, 16384)
 		filter := Filter{
-			Overlap: 8192,
-			C:       0.5,
-			Gain:    20.0,
+			C:      0.1,
+			Gain:   10.0,
+			Cutoff: 32, // zero DC-like bands
 		}
 
 		noise.Fill()
+		//noise.Plot()
 
 		for {
 			noise.ShiftAndFill()
@@ -182,7 +228,7 @@ func play(config *Config) {
 	}
 
 	stream, err := portaudio.OpenDefaultStream(
-		0, 2, float64(config.SampleRate), 200000, consume)
+		0, 2, float64(config.SampleRate), 163840, consume)
 	check_error(err)
 
 	check_error(stream.Start())
