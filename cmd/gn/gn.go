@@ -7,6 +7,7 @@ import (
 	"github.com/gordonklaus/portaudio"
 	"github.com/mjibson/go-dsp/dsputils"
 	"github.com/mjibson/go-dsp/fft"
+	//"github.com/mjibson/go-dsp/window"
 	//"math"
 	"math/rand"
 	"os"
@@ -37,6 +38,8 @@ type Buffer struct {
 
 type Filter struct {
 	Overlap int
+	C       float64
+	Gain    float64
 }
 
 func (self *Buffer) Dump(path string) {
@@ -124,35 +127,43 @@ func (self Filter) Apply(in, out *Buffer) {
 		l = fft.FFT(l)
 		r = fft.FFT(r)
 
-		/*
-			for j := range l {
-				l[j] *= self.Factors[j]
-				r[j] *= self.Factors[j]
+		for j := range l {
+			f := 0.0
+			if j > 0 {
+				f = 1.0 / (self.C*float64(j) + 1.0)
 			}
-		*/
+			l[j] *= complex(f, 0.0)
+			r[j] *= complex(f, 0.0)
+		}
 
 		l = fft.IFFT(l)
 		r = fft.IFFT(r)
 
 		for j := 0; j < in.SegmentSize; j++ {
 			n := (i-1)*in.SegmentSize + j
-			out.Left[n] = real(l[self.Overlap+j])
-			out.Right[n] = real(r[self.Overlap+j])
+			out.Left[n] = self.Gain * real(l[self.Overlap+j])
+			out.Right[n] = self.Gain * real(r[self.Overlap+j])
 		}
 	}
+	/*
+		out.Plot()
+		os.Exit(-1)
+	*/
 }
 
 func play(config *Config) {
 	portaudio.Initialize()
 	defer portaudio.Terminate()
 
-	buffers := make(chan Buffer, 4)
+	buffers := make(chan Buffer, 32)
 
 	go func() {
-		noise := NewBuffer(12, 4410)
-		filtered := NewBuffer(10, 4410)
+		noise := NewBuffer(12, 16384)
+		filtered := NewBuffer(10, 16384)
 		filter := Filter{
-			Overlap: 441,
+			Overlap: 8192,
+			C:       0.5,
+			Gain:    20.0,
 		}
 
 		noise.Fill()
@@ -171,7 +182,7 @@ func play(config *Config) {
 	}
 
 	stream, err := portaudio.OpenDefaultStream(
-		0, 2, float64(config.SampleRate), 44100, consume)
+		0, 2, float64(config.SampleRate), 200000, consume)
 	check_error(err)
 
 	check_error(stream.Start())
@@ -188,7 +199,7 @@ func main() {
 	flag.BoolVar(&config.Quiet, "quiet", true, "Don't print messages.")
 	flag.IntVar(&config.SampleRate, "sample-rate", 44100, "samples per second")
 	flag.IntVar(&config.Time, "time", 3600, "length of play in seconds")
-	flag.Float64Var(&config.Vol, "volume", 0.5, "output volume as a float")
+	flag.Float64Var(&config.Vol, "volume", 1.0, "output volume as a float")
 	flag.Parse()
 
 	if config.Quiet {
