@@ -8,7 +8,6 @@ import (
 	"github.com/mjibson/go-dsp/dsputils"
 	"github.com/mjibson/go-dsp/fft"
 	"github.com/mjibson/go-dsp/window"
-	//"math"
 	"math/rand"
 	"os"
 	"runtime"
@@ -37,9 +36,9 @@ type Buffer struct {
 }
 
 type Filter struct {
-	Gain   float64
+	Alpha  float64
 	Cutoff int
-	C      float64
+	Gain   float64
 }
 
 func (self *Buffer) Dump(path string) {
@@ -121,23 +120,48 @@ func (self Filter) Apply(in, out *Buffer) {
 	size := in.SegmentSize
 	half := size / 2
 
+	/*
+	 * Make Buffers
+	 */
+
 	la := make([]float64, len(in.Left))
 	ra := make([]float64, len(in.Left))
-	copy(la, in.Left)
-	copy(ra, in.Right)
-	lc := dsputils.ToComplex(la)
-	rc := dsputils.ToComplex(ra)
-
 	lb := make([]float64, len(la)-size)
 	rb := make([]float64, len(ra)-size)
+
+	/*
+	 * Fill Buffers
+	 */
+	copy(la, in.Left)
+	copy(ra, in.Right)
 	copy(lb, la[half:len(la)-half])
 	copy(rb, ra[half:len(ra)-half])
-	ld := dsputils.ToComplex(lb)
-	rd := dsputils.ToComplex(rb)
 
+	/*
+	 * Apply Windowing Functions
+	 */
 	for i := 0; i < len(la); i += size {
 		window.Apply(la[i:i+size], win)
 		window.Apply(ra[i:i+size], win)
+	}
+
+	for i := 0; i < len(lb); i += size {
+		window.Apply(lb[i:i+size], win)
+		window.Apply(rb[i:i+size], win)
+	}
+
+	/*
+	 * Convert Real to Complex Numbers
+	 */
+	lc := dsputils.ToComplex(la)
+	rc := dsputils.ToComplex(ra)
+	ld := dsputils.ToComplex(lb)
+	rd := dsputils.ToComplex(rb)
+
+	/*
+	 * Apply FFT, Filter, & IFFT
+	 */
+	for i := 0; i < len(la); i += size {
 		ls := lc[i : i+size]
 		rs := rc[i : i+size]
 		ls = fft.FFT(ls)
@@ -145,8 +169,9 @@ func (self Filter) Apply(in, out *Buffer) {
 
 		for j := range ls {
 			f := 0.0
-			if j > self.Cutoff {
-				f = 1.0 / (self.C*float64(j) + 1.0)
+			// Something something DC and Nyquist bins...
+			if j > self.Cutoff && j != size/2 {
+				f = 1.0 / (self.Alpha*float64(j) + 1.0)
 			}
 			ls[j] *= complex(f, 0.0)
 			rs[j] *= complex(f, 0.0)
@@ -159,8 +184,6 @@ func (self Filter) Apply(in, out *Buffer) {
 	}
 
 	for i := 0; i < len(lb); i += size {
-		window.Apply(lb[i:i+size], win)
-		window.Apply(rb[i:i+size], win)
 		ls := ld[i : i+size]
 		rs := rd[i : i+size]
 		ls = fft.FFT(ls)
@@ -168,8 +191,9 @@ func (self Filter) Apply(in, out *Buffer) {
 
 		for j := range ls {
 			f := 0.0
-			if j > self.Cutoff {
-				f = 1.0 / (self.C*float64(j) + 1.0)
+			// Something something DC and Nyquist bins...
+			if j > self.Cutoff && j != size/2 {
+				f = 1.0 / (self.Alpha*float64(j) + 1.0)
 			}
 			ls[j] *= complex(f, 0.0)
 			rs[j] *= complex(f, 0.0)
@@ -181,9 +205,12 @@ func (self Filter) Apply(in, out *Buffer) {
 		copy(rd[i:i+size], rs)
 	}
 
+	/*
+	 * Add Buffers
+	 */
 	for i := range lb {
-		ls := (real(lc[i+half]) + real(ld[i])) / 2.0
-		rs := (real(rc[i+half]) + real(rd[i])) / 2.0
+		ls := (real(lc[i+half]) + real(ld[i]))
+		rs := (real(rc[i+half]) + real(rd[i]))
 		out.Left[i] = self.Gain * ls
 		out.Right[i] = self.Gain * rs
 	}
@@ -200,22 +227,17 @@ func play(config *Config) {
 	portaudio.Initialize()
 	defer portaudio.Terminate()
 
-	buffers := make(chan Buffer, 4)
-
+	buffers := make(chan Buffer, 3)
 	go func() {
 		noise := NewBuffer(11, 16384)
 		filtered := NewBuffer(10, 16384)
-
-		// TODO: modulate C, Gain
 		filter := Filter{
-			C:      0.1,
+			Alpha:  0.1,
+			Cutoff: 5,
 			Gain:   10.0,
-			Cutoff: 32, // zero DC-like bands
 		}
 
 		noise.Fill()
-		//noise.Plot()
-
 		for {
 			noise.ShiftAndFill()
 			filter.Apply(&noise, &filtered)
