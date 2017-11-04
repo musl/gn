@@ -280,6 +280,15 @@ func consume(buffers chan Buffer) func([]float32) {
 func play(config *Config) {
 	buffers := make(chan Buffer, config.BufferCount)
 
+	/*
+		go func() {
+			for {
+				time.Sleep(100 * time.Millisecond)
+				fmt.Printf("%d ", len(buffers))
+			}
+		}()
+	*/
+
 	portaudio.Initialize()
 	defer portaudio.Terminate()
 
