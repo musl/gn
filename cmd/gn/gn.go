@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const Version = "0.0.2"
+
 func check_error(err error) {
 	if err != nil {
 		panic(err)
@@ -323,6 +325,6 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	rand.Seed(time.Now().UTC().UnixNano())
 
-	fmt.Println("gn v0.0.0")
+	fmt.Printf("gn v%s\n", Version)
 	play(&config)
 }
