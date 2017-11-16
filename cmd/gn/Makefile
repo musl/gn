@@ -2,7 +2,7 @@ BIN := $(shell basename $(CURDIR))
 
 .PHONY: all clean run test
 
-all: clean
+all: clean $(BIN)
 
 clean:
 	rm -f $(BIN)

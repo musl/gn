@@ -11,7 +11,6 @@ import (
 	"math/rand"
 	"os"
 	"runtime"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -25,16 +24,17 @@ func check_error(err error) {
 }
 
 type Config struct {
-	Quiet        bool
-	SampleRate   int
-	Time         int
-	Vol          float64
-	BufferCount  int
-	SegmentSize  int
-	SegmentCount int
-	Alpha        float64
-	Gain         float64
-	Cutoff       int
+	Quiet          bool
+	SampleRate     int
+	Time           int
+	Vol            float64
+	BufferCount    int
+	SegmentSize    int
+	SegmentCount   int
+	Alpha          float64
+	Gain           float64
+	Cutoff         int
+	RecycleBuffers bool
 }
 
 type Buffer struct {
@@ -125,7 +125,6 @@ func (self *Buffer) Copy(out []float32) {
 }
 
 func (self Filter) Apply(in, out *Buffer) {
-	var wg sync.WaitGroup
 	win := window.Hann
 	size := in.SegmentSize
 	half := size / 2
@@ -150,25 +149,15 @@ func (self Filter) Apply(in, out *Buffer) {
 	/*
 	 * Apply Windowing Functions
 	 */
-	wg.Add(2)
+	for i := 0; i < len(la); i += size {
+		window.Apply(la[i:i+size], win)
+		window.Apply(ra[i:i+size], win)
+	}
 
-	go func() {
-		defer wg.Done()
-		for i := 0; i < len(la); i += size {
-			window.Apply(la[i:i+size], win)
-			window.Apply(ra[i:i+size], win)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		for i := 0; i < len(lb); i += size {
-			window.Apply(lb[i:i+size], win)
-			window.Apply(rb[i:i+size], win)
-		}
-	}()
-
-	wg.Wait()
+	for i := 0; i < len(lb); i += size {
+		window.Apply(lb[i:i+size], win)
+		window.Apply(rb[i:i+size], win)
+	}
 
 	/*
 	 * Convert Real to Complex Numbers
@@ -181,59 +170,49 @@ func (self Filter) Apply(in, out *Buffer) {
 	/*
 	 * Apply FFT, Filter, & IFFT
 	 */
-	wg.Add(2)
+	for i := 0; i < len(la); i += size {
+		ls := lc[i : i+size]
+		rs := rc[i : i+size]
+		ls = fft.FFT(ls)
+		rs = fft.FFT(rs)
 
-	go func() {
-		defer wg.Done()
-		for i := 0; i < len(la); i += size {
-			ls := lc[i : i+size]
-			rs := rc[i : i+size]
-			ls = fft.FFT(ls)
-			rs = fft.FFT(rs)
-
-			for j := range ls {
-				f := 0.0
-				// Something something DC and Nyquist bins...
-				if j > self.Cutoff && j != size/2 {
-					f = 1.0 / (self.Alpha*float64(j) + 1.0)
-				}
-				ls[j] *= complex(f, 0.0)
-				rs[j] *= complex(f, 0.0)
+		for j := range ls {
+			f := 0.0
+			// Something something DC and zeroth bucket...
+			if j > self.Cutoff {
+				f = 1.0 / (self.Alpha*float64(j) + 1.0)
 			}
-
-			ls = fft.IFFT(ls)
-			rs = fft.IFFT(rs)
-			copy(lc[i:i+size], ls)
-			copy(rc[i:i+size], rs)
+			ls[j] *= complex(f, 0.0)
+			rs[j] *= complex(f, 0.0)
 		}
-	}()
 
-	go func() {
-		defer wg.Done()
-		for i := 0; i < len(lb); i += size {
-			ls := ld[i : i+size]
-			rs := rd[i : i+size]
-			ls = fft.FFT(ls)
-			rs = fft.FFT(rs)
+		ls = fft.IFFT(ls)
+		rs = fft.IFFT(rs)
+		copy(lc[i:i+size], ls)
+		copy(rc[i:i+size], rs)
+	}
 
-			for j := range ls {
-				f := 0.0
-				// Something something DC and Nyquist bins...
-				if j > self.Cutoff && j != size/2 {
-					f = 1.0 / (self.Alpha*float64(j) + 1.0)
-				}
-				ls[j] *= complex(f, 0.0)
-				rs[j] *= complex(f, 0.0)
+	for i := 0; i < len(lb); i += size {
+		ls := ld[i : i+size]
+		rs := rd[i : i+size]
+		ls = fft.FFT(ls)
+		rs = fft.FFT(rs)
+
+		for j := range ls {
+			f := 0.0
+			// Something something DC and Nyquist bins...
+			if j > self.Cutoff && j != size/2 {
+				f = 1.0 / (self.Alpha*float64(j) + 1.0)
 			}
-
-			ls = fft.IFFT(ls)
-			rs = fft.IFFT(rs)
-			copy(ld[i:i+size], ls)
-			copy(rd[i:i+size], rs)
+			ls[j] *= complex(f, 0.0)
+			rs[j] *= complex(f, 0.0)
 		}
-	}()
 
-	wg.Wait()
+		ls = fft.IFFT(ls)
+		rs = fft.IFFT(rs)
+		copy(ld[i:i+size], ls)
+		copy(rd[i:i+size], rs)
+	}
 
 	/*
 	 * Add Buffers
@@ -244,11 +223,6 @@ func (self Filter) Apply(in, out *Buffer) {
 		out.Left[i] = self.Gain * ls
 		out.Right[i] = self.Gain * rs
 	}
-
-	/*
-		out.Plot()
-		os.Exit(-1)
-	*/
 }
 
 func produce(buffers chan Buffer, config *Config) {
@@ -263,10 +237,38 @@ func produce(buffers chan Buffer, config *Config) {
 	noise.Fill()
 
 	for {
-		noise.ShiftAndFill()
 		filter.Apply(&noise, &filtered)
 		filtered.Mul(config.Vol)
 		buffers <- filtered
+		noise.ShiftAndFill()
+	}
+}
+
+func recycle(buffers chan Buffer, config *Config) {
+	count := cap(buffers)
+	b := make([]Buffer, count)
+
+	noise := NewBuffer(config.SegmentCount+1, config.SegmentSize)
+	filter := Filter{
+		Alpha:  config.Alpha,
+		Cutoff: config.Cutoff,
+		Gain:   config.Gain,
+	}
+
+	noise.Fill()
+
+	for i := 0; i < count; i++ {
+		b[i] = NewBuffer(config.SegmentCount, config.SegmentSize)
+		filter.Apply(&noise, &b[i])
+		b[i].Mul(config.Vol)
+		buffers <- b[i]
+		noise.ShiftAndFill()
+	}
+
+	i := 0
+	for {
+		buffers <- b[i]
+		i = (i + 1) % count
 	}
 }
 
@@ -280,26 +282,25 @@ func consume(buffers chan Buffer) func([]float32) {
 func play(config *Config) {
 	buffers := make(chan Buffer, config.BufferCount)
 
-	/*
-		go func() {
-			for {
-				time.Sleep(100 * time.Millisecond)
-				fmt.Printf("%d ", len(buffers))
-			}
-		}()
-	*/
+	if config.RecycleBuffers {
+		// Make and re-use some number of buffers to avoid wasting CPU.
+		go recycle(buffers, config)
+	} else {
+		// Continually make new buffers if you want to waste CPU
+		// continually.
+		go produce(buffers, config)
+	}
 
 	portaudio.Initialize()
 	defer portaudio.Terminate()
 
-	go produce(buffers, config)
-
 	stream, err := portaudio.OpenDefaultStream(
-		0,
-		2,
+		0, // input channels
+		2, // output channels
 		float64(config.SampleRate),
 		config.SegmentSize*config.SegmentCount,
-		consume(buffers))
+		consume(buffers),
+	)
 	check_error(err)
 
 	check_error(stream.Start())
@@ -313,16 +314,17 @@ func play(config *Config) {
 func main() {
 	config := Config{}
 
-	flag.BoolVar(&config.Quiet, "quiet", true, "Don't print messages.")
 	flag.IntVar(&config.SampleRate, "sample-rate", 44100, "samples per second")
 	flag.IntVar(&config.BufferCount, "buffer-count", 3, "number of buffers to calculate ahead of time")
-	flag.IntVar(&config.SegmentCount, "segment-count", 10, "segments per buffer")
-	flag.IntVar(&config.SegmentSize, "segment-size", 16384, "buffer segment size in samples")
+	flag.BoolVar(&config.RecycleBuffers, "recycle", true, "re-use pre-calculated buffers to save CPU cycles")
+	flag.IntVar(&config.SegmentCount, "segment-count", 4, "segments per buffer")
+	flag.IntVar(&config.SegmentSize, "segment-size", 11025, "segment size in samples")
 	flag.IntVar(&config.Time, "time", 3600, "length of play in seconds")
+	flag.IntVar(&config.Cutoff, "cutoff", 5, "discard n fft buckets starting at 0")
+	flag.Float64Var(&config.Alpha, "alpha", 0.025, "0.0 is white noise, 0.1 is pink-ish noise")
+	flag.Float64Var(&config.Gain, "gain", 4.0, "use this to adjust for low alpha values")
 	flag.Float64Var(&config.Vol, "volume", 1.0, "output volume as a float")
-	flag.Float64Var(&config.Alpha, "alpha", 0.1, "0.0 is white noise, 0.1 is pink-ish noise")
-	flag.IntVar(&config.Cutoff, "cutoff", 5, "discard fft buckets starting at 0")
-	flag.Float64Var(&config.Gain, "gain", 10.0, "use this to adjust for low alpha values")
+	flag.BoolVar(&config.Quiet, "quiet", true, "Don't print messages.")
 	flag.Parse()
 
 	if config.Quiet {
